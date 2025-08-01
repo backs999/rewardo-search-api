@@ -786,6 +786,15 @@ async fn latest_reward_flights(
     }
 }
 
+/// Health check endpoint that returns a 200 OK response
+///
+/// # Returns
+/// A 200 OK response with a simple message
+#[get("/health")]
+async fn health_check() -> impl Responder {
+    HttpResponse::Ok().body("OK")
+}
+
 /// Handler for retrieving the cheapest reward flights based on origin, destination, and cabin type
 ///
 /// # Parameters
@@ -888,6 +897,7 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .app_data(repository.clone())
+            .service(health_check)
             .service(latest_reward_flights)
             .service(cheapest_reward_flights)
     })
