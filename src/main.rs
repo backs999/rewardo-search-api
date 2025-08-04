@@ -862,7 +862,7 @@ async fn main() -> std::io::Result<()> {
     dotenv().ok();
     env_logger::init();
 
-    info!("Starting server at http://127.0.0.1:8080");
+    info!("Starting server at http://127.0.0.1:8086");
 
     // Get database URL from environment
     let database_url = std::env::var("DATABASE_URL")
@@ -901,7 +901,7 @@ async fn main() -> std::io::Result<()> {
             .service(latest_reward_flights)
             .service(cheapest_reward_flights)
     })
-    .bind(("127.0.0.1", 8086))?
+    .bind("0.0.0.0:8086")?
     .run()
     .await
 }
