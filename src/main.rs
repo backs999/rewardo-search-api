@@ -36,6 +36,21 @@ pub struct RewardFlightLatest {
     pub award_first: Option<AwardFirst>,
 }
 
+// Historic reward flight model
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RewardFlightLatestHistoric {
+    pub id: Option<String>,
+    pub origin: String,
+    pub destination: String,
+    pub departure: String,
+    pub carrier_code: String,
+    pub scraped_at: DateTime<Utc>,
+    pub award_economy: Option<AwardEconomy>,
+    pub award_business: Option<AwardBusiness>,
+    pub award_premium_economy: Option<AwardPremiumEconomy>,
+    pub award_first: Option<AwardFirst>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AwardEconomy {
     pub id: Option<String>,
@@ -104,6 +119,16 @@ pub trait RewardFlightRepository {
         page_number: usize,
         page_size: usize,
     ) -> Result<Page<RewardFlightLatest>, sqlx::Error>;
+    
+    async fn find_by_origin_and_destination_and_carrier_code_and_departure_order_by_scraped_at_asc(
+        &self,
+        origin: &str,
+        destination: &str,
+        carrier_code: &str,
+        departure_date: NaiveDate,
+        page_number: usize,
+        page_size: usize,
+    ) -> Result<Page<RewardFlightLatestHistoric>, sqlx::Error>;
 }
 
 // Database implementation of the repository
@@ -547,6 +572,200 @@ impl RewardFlightRepository for RewardFlightLatestRepository {
             total_pages,
         })
     }
+    
+    async fn find_by_origin_and_destination_and_carrier_code_and_departure_order_by_scraped_at_asc(
+        &self,
+        origin: &str,
+        destination: &str,
+        carrier_code: &str,
+        departure_date: NaiveDate,
+        page_number: usize,
+        page_size: usize,
+    ) -> Result<Page<RewardFlightLatestHistoric>, sqlx::Error> {
+        // Calculate offset
+        let offset = (page_number * page_size) as i64;
+        
+        // Get total count
+        let count_query = format!(
+            "SELECT COUNT(*) as count 
+            FROM reward_flights_latest_historic rflh
+            WHERE rflh.origin = $1 
+            AND rflh.destination = $2 
+            AND rflh.carrier_code = $3 
+            AND rflh.departure::date = $4"
+        );
+        
+        info!("Executing historic count SQL query: {}", &count_query);
+        info!("Count query parameters: origin={}, destination={}, carrier_code={}, departure_date={}", 
+            origin, destination, carrier_code, departure_date);
+            
+        let count_result = sqlx::query_as::<_, (i64,)>(&count_query)
+            .bind(origin)
+            .bind(destination)
+            .bind(carrier_code)
+            .bind(departure_date)
+            .fetch_one(&self.pool)
+            .await;
+            
+        info!("Raw Historic Count SQL Response: {:?}", count_result);
+        
+        let total_count: i64 = count_result
+            .map(|row| row.0)
+            .unwrap_or(0);
+            
+        info!("Historic Count SQL Response: Total count = {}", total_count);
+
+        // Get paginated results
+        let query = format!(
+            "SELECT 
+                rflh.id, 
+                rflh.origin, 
+                rflh.destination, 
+                rflh.departure, 
+                rflh.carrier_code, 
+                rflh.scraped_at,
+                ae.id as ae_id,
+                ae.cabin_points_value as ae_cabin_points_value,
+                ae.is_saver_award as ae_is_saver_award,
+                ae.cabin_class_seat_count as ae_cabin_class_seat_count,
+                ae.cabin_class_seat_count_string as ae_cabin_class_seat_count_string,
+                ab.id as ab_id,
+                ab.cabin_points_value as ab_cabin_points_value,
+                ab.is_saver_award as ab_is_saver_award,
+                ab.cabin_class_seat_count as ab_cabin_class_seat_count,
+                ab.cabin_class_seat_count_string as ab_cabin_class_seat_count_string,
+                ape.id as ape_id,
+                ape.cabin_points_value as ape_cabin_points_value,
+                ape.is_saver_award as ape_is_saver_award,
+                ape.cabin_class_seat_count as ape_cabin_class_seat_count,
+                ape.cabin_class_seat_count_string as ape_cabin_class_seat_count_string,
+                af.id as af_id,
+                af.cabin_points_value as af_cabin_points_value,
+                af.is_saver_award as af_is_saver_award,
+                af.cabin_class_seat_count as af_cabin_class_seat_count,
+                af.cabin_class_seat_count_string as af_cabin_class_seat_count_string
+            FROM reward_flights_latest_historic rflh
+            LEFT JOIN award_economy_historic ae ON ae.flight_id = rflh.id
+            LEFT JOIN award_business_historic ab ON ab.flight_id = rflh.id
+            LEFT JOIN award_premium_economy_historic ape ON ape.flight_id = rflh.id
+            LEFT JOIN award_first_historic af ON af.flight_id = rflh.id
+            WHERE rflh.origin = $1 
+            AND rflh.destination = $2 
+            AND rflh.carrier_code = $3 
+            AND rflh.departure::date = $4
+            ORDER BY rflh.scraped_at ASC
+            LIMIT $5 OFFSET $6"
+        );
+        
+        info!("Executing historic SQL query: {}", &query);
+        info!("Query parameters: origin={}, destination={}, carrier_code={}, departure_date={}, limit={}, offset={}", 
+            origin, destination, carrier_code, departure_date, page_size, offset);
+            
+        let rows = sqlx::query(&query)
+            .bind(origin)
+            .bind(destination)
+            .bind(carrier_code)
+            .bind(departure_date)
+            .bind(page_size as i64)
+            .bind(offset)
+            .fetch_all(&self.pool)
+            .await?;
+            
+        info!("Historic SQL Response: Found {} rows", rows.len());
+        
+        // Convert rows to RewardFlightLatestHistoric objects
+        let flights = rows
+            .into_iter()
+            .map(|row| {
+                let award_economy = match row.try_get::<i32, _>("ae_id") {
+                    Ok(id) => {
+                        Some(AwardEconomy {
+                            id: Some(id.to_string()),
+                            cabin_points_value: row.try_get::<i32, _>("ae_cabin_points_value").ok(),
+                            is_saver_award: row.try_get::<bool, _>("ae_is_saver_award").ok(),
+                            cabin_class_seat_count: row.try_get::<i32, _>("ae_cabin_class_seat_count").ok(),
+                            cabin_class_seat_count_string: row.try_get::<String, _>("ae_cabin_class_seat_count_string").ok(),
+                        })
+                    },
+                    Err(_) => None
+                };
+                
+                let award_business = match row.try_get::<i32, _>("ab_id") {
+                    Ok(id) => {
+                        Some(AwardBusiness {
+                            id: Some(id.to_string()),
+                            cabin_points_value: row.try_get::<i32, _>("ab_cabin_points_value").ok(),
+                            is_saver_award: row.try_get::<bool, _>("ab_is_saver_award").ok(),
+                            cabin_class_seat_count: row.try_get::<i32, _>("ab_cabin_class_seat_count").ok(),
+                            cabin_class_seat_count_string: row.try_get::<String, _>("ab_cabin_class_seat_count_string").ok(),
+                        })
+                    },
+                    Err(_) => None
+                };
+                
+                let award_premium_economy = match row.try_get::<i32, _>("ape_id") {
+                    Ok(id) => {
+                        Some(AwardPremiumEconomy {
+                            id: Some(id.to_string()),
+                            cabin_points_value: row.try_get::<i32, _>("ape_cabin_points_value").ok(),
+                            is_saver_award: row.try_get::<bool, _>("ape_is_saver_award").ok(),
+                            cabin_class_seat_count: row.try_get::<i32, _>("ape_cabin_class_seat_count").ok(),
+                            cabin_class_seat_count_string: row.try_get::<String, _>("ape_cabin_class_seat_count_string").ok(),
+                        })
+                    },
+                    Err(_) => None
+                };
+                
+                let award_first = match row.try_get::<i32, _>("af_id") {
+                    Ok(id) => {
+                        Some(AwardFirst {
+                            id: Some(id.to_string()),
+                            cabin_points_value: row.try_get::<i32, _>("af_cabin_points_value").ok(),
+                            is_saver_award: row.try_get::<bool, _>("af_is_saver_award").ok(),
+                            cabin_class_seat_count: row.try_get::<i32, _>("af_cabin_class_seat_count").ok(),
+                            cabin_class_seat_count_string: row.try_get::<String, _>("af_cabin_class_seat_count_string").ok(),
+                        })
+                    },
+                    Err(_) => None
+                };
+
+                let departure: Option<NaiveDate> = row.try_get("departure").ok().flatten();
+                let formatted_departure = departure.map_or_else(
+                    || String::new(), 
+                    |date| date.format("%Y-%m-%d").to_string()
+                );
+                
+                let id = match row.try_get::<i32, _>("id") {
+                    Ok(id) => Some(id.to_string()),
+                    Err(_) => None
+                };
+                
+                RewardFlightLatestHistoric {
+                    id,
+                    origin: row.try_get("origin").unwrap_or_default(),
+                    destination: row.try_get("destination").unwrap_or_default(),
+                    departure: formatted_departure,
+                    carrier_code: row.try_get("carrier_code").unwrap_or_default(),
+                    scraped_at: row.try_get("scraped_at").unwrap_or_else(|_| Utc::now()),
+                    award_economy,
+                    award_business,
+                    award_premium_economy,
+                    award_first,
+                }
+            })
+            .collect();
+
+        // Calculate total pages
+        let total_pages = (total_count as f64 / page_size as f64).ceil() as usize;
+
+        Ok(Page {
+            content: flights,
+            page_number,
+            page_size,
+            total_elements: total_count,
+            total_pages,
+        })
+    }
 }
 
 // Mock implementation for testing
@@ -733,6 +952,87 @@ impl RewardFlightRepository for MockRewardFlightRepository {
             total_pages,
         })
     }
+    
+    async fn find_by_origin_and_destination_and_carrier_code_and_departure_order_by_scraped_at_asc(
+        &self,
+        origin: &str,
+        destination: &str,
+        carrier_code: &str,
+        departure_date: NaiveDate,
+        page_number: usize,
+        page_size: usize,
+    ) -> Result<Page<RewardFlightLatestHistoric>, sqlx::Error> {
+        // Create some mock data
+        let mut flights = Vec::new();
+        
+        // Generate 5 mock historic flights for the given date with different scraped_at times
+        for i in 0..5 {
+            // Convert i to i32 for calculations
+            let i_i32 = i as i32;
+            
+            // Create different scraped_at times (each 1 hour apart)
+            let base_time = Utc::now() - chrono::Duration::hours(24 - i);
+            
+            let flight = RewardFlightLatestHistoric {
+                id: Some(format!("mock-historic-{}-{}-{}", origin, destination, i)),
+                origin: origin.to_string(),
+                destination: destination.to_string(),
+                departure: departure_date.to_string(),
+                carrier_code: carrier_code.to_string(),
+                scraped_at: base_time,
+                award_economy: Some(AwardEconomy {
+                    id: Some(format!("mock-historic-economy-id-{}", i)),
+                    cabin_points_value: Some(10000 + (i_i32 * 500)),
+                    is_saver_award: Some(true),
+                    cabin_class_seat_count: Some(5 - i_i32),
+                    cabin_class_seat_count_string: Some(format!("{}", 5 - i_i32)),
+                }),
+                award_business: Some(AwardBusiness {
+                    id: Some(format!("mock-historic-business-id-{}", i)),
+                    cabin_points_value: Some(30000 + (i_i32 * 1000)),
+                    is_saver_award: Some(false),
+                    cabin_class_seat_count: Some(2),
+                    cabin_class_seat_count_string: Some("2".to_string()),
+                }),
+                award_premium_economy: Some(AwardPremiumEconomy {
+                    id: Some(format!("mock-historic-premium-economy-id-{}", i)),
+                    cabin_points_value: Some(20000 + (i_i32 * 750)),
+                    is_saver_award: Some(true),
+                    cabin_class_seat_count: Some(3),
+                    cabin_class_seat_count_string: Some("3".to_string()),
+                }),
+                award_first: None,
+            };
+            
+            flights.push(flight);
+        }
+        
+        // Sort flights by scraped_at (ascending)
+        flights.sort_by(|a, b| a.scraped_at.cmp(&b.scraped_at));
+        
+        // Calculate total elements
+        let total_elements = flights.len() as i64;
+        
+        // Apply pagination
+        let start = page_number * page_size;
+        let end = std::cmp::min(start + page_size, flights.len());
+        let paginated_flights = if start < flights.len() {
+            flights[start..end].to_vec()
+        } else {
+            Vec::new()
+        };
+        
+        // Calculate total pages
+        let total_pages = (total_elements as f64 / page_size as f64).ceil() as usize;
+        
+        Ok(Page {
+            content: paginated_flights,
+            page_number,
+            page_size,
+            total_elements,
+            total_pages,
+        })
+    }
 }
 
 /// Handler for retrieving the latest reward flights based on search criteria
@@ -838,6 +1138,50 @@ async fn cheapest_reward_flights(
     }
 }
 
+/// Handler for retrieving historic reward flights for a specific date
+///
+/// # Parameters
+/// * `origin` - The origin airport code (e.g., "LHR")
+/// * `destination` - The destination airport code (e.g., "JFK")
+/// * `on` - The specific date for the flight in YYYY-MM-DD format
+/// * `page-number` - The page number for pagination (default: 0)
+/// * `page-size` - The number of items per page (default: 10)
+///
+/// # Returns
+/// A paginated list of historic reward flights for the specified date ordered by scraped_at ascending
+#[get("/api/v1/airline/vs/reward-flights/origin/{origin}/destination/{destination}/on/{on}/historic")]
+async fn historic_reward_flights(
+    path: web::Path<(String, String, String)>,
+    query: web::Query<PageParams>,
+    repo: web::Data<RewardFlightLatestRepository>,
+) -> impl Responder {
+    let (origin, destination, on) = path.into_inner();
+    let page_number = query.page_number.unwrap_or(0);
+    let page_size = query.page_size.unwrap_or(10);
+    
+    // Parse date
+    let departure_date = match NaiveDate::parse_from_str(&on, "%Y-%m-%d") {
+        Ok(date) => date,
+        Err(_) => return HttpResponse::BadRequest().body("Invalid date format. Expected YYYY-MM-DD"),
+    };
+
+    // Query the repository
+    match repo.find_by_origin_and_destination_and_carrier_code_and_departure_order_by_scraped_at_asc(
+        &origin,
+        &destination,
+        "VS",
+        departure_date,
+        page_number as usize,
+        page_size as usize,
+    ).await {
+        Ok(page) => HttpResponse::Ok().json(page),
+        Err(e) => {
+            log::error!("Database error: {}", e);
+            HttpResponse::InternalServerError().body("Failed to fetch historic reward flights")
+        }
+    }
+}
+
 // Query parameters for pagination
 #[derive(Debug, Deserialize)]
 struct PageParams {
@@ -900,6 +1244,7 @@ async fn main() -> std::io::Result<()> {
             .service(health_check)
             .service(latest_reward_flights)
             .service(cheapest_reward_flights)
+            .service(historic_reward_flights)
     })
     .bind("0.0.0.0:8086")?
     .run()
