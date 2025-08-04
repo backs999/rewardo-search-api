@@ -1,0 +1,53 @@
+# Stage 1: Build the application
+# Using the official Rust image for building
+FROM rust:latest AS builder
+
+WORKDIR /app
+
+# Copy the Cargo files for dependency resolution
+COPY Cargo.toml Cargo.lock ./
+
+RUN mkdir -p src
+
+COPY src/ src/
+
+# Build the application
+RUN cargo build --release
+
+# Stage 2: Minimal image with AWS CLI for S3 upload only
+FROM amazon/aws-cli:latest
+
+WORKDIR /app
+
+# Copy the built binary from the builder stage
+COPY --from=builder /app/target/release/rewardo-search-api .
+
+# S3 deployment configuration (can be overridden at runtime)
+ENV S3_BUCKET=rewardo-deploy-artefacts
+ENV S3_PREFIX=rewardo-search-api
+ENV VERSION=latest
+
+# Create an entrypoint script that uploads to S3
+RUN echo '#!/bin/sh' > /app/entrypoint.sh && \
+    echo '# Create a timestamped filename' >> /app/entrypoint.sh && \
+    echo 'TIMESTAMP=$(date +%Y%m%d-%H%M%S)' >> /app/entrypoint.sh && \
+    echo 'S3_FILENAME="rewardo-search-api-$VERSION-$TIMESTAMP"' >> /app/entrypoint.sh && \
+    echo '' >> /app/entrypoint.sh && \
+    echo '# Upload to S3' >> /app/entrypoint.sh && \
+    echo 'S3_PATH="s3://$S3_BUCKET/$S3_PREFIX/$S3_FILENAME"' >> /app/entrypoint.sh && \
+    echo 'echo "Uploading binary to $S3_PATH..."' >> /app/entrypoint.sh && \
+    echo 'aws s3 cp ./rewardo-search-api "$S3_PATH"' >> /app/entrypoint.sh && \
+    echo '' >> /app/entrypoint.sh && \
+    echo '# Create a "latest" version' >> /app/entrypoint.sh && \
+    echo 'LATEST_PATH="s3://$S3_BUCKET/$S3_PREFIX/rewardo-search-api-latest"' >> /app/entrypoint.sh && \
+    echo 'echo "Setting as latest version at $LATEST_PATH..."' >> /app/entrypoint.sh && \
+    echo 'aws s3 cp "$S3_PATH" "$LATEST_PATH"' >> /app/entrypoint.sh && \
+    echo '' >> /app/entrypoint.sh && \
+    echo 'echo "Deployment completed successfully!"' >> /app/entrypoint.sh && \
+    echo 'echo "Artifact URL: $S3_PATH"' >> /app/entrypoint.sh && \
+    echo 'echo "Latest URL: $LATEST_PATH"' >> /app/entrypoint.sh
+
+RUN chmod +x /app/entrypoint.sh
+
+# Set the entry point to the script
+ENTRYPOINT ["/app/entrypoint.sh"]
