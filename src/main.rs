@@ -901,7 +901,7 @@ async fn main() -> std::io::Result<()> {
             .service(latest_reward_flights)
             .service(cheapest_reward_flights)
     })
-    .bind(("127.0.0.1", 8080))?
+    .bind(("127.0.0.1", 8086))?
     .run()
     .await
 }
