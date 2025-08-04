@@ -11,11 +11,6 @@
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
 
-# Environment files
-.env
-.env.*
-!.env.example
-
 # IDE files
 .idea/
 .vscode/
