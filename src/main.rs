@@ -588,11 +588,11 @@ impl RewardFlightRepository for RewardFlightLatestRepository {
         // Get total count
         let count_query = format!(
             "SELECT COUNT(*) as count 
-            FROM reward_flights_latest_historic rflh
-            WHERE rflh.origin = $1 
-            AND rflh.destination = $2 
-            AND rflh.carrier_code = $3 
-            AND rflh.departure::date = $4"
+            FROM reward_flights_history rfh
+            WHERE rfh.origin = $1 
+            AND rfh.destination = $2 
+            AND rfh.carrier_code = $3 
+            AND rfh.departure::date = $4"
         );
         
         info!("Executing historic count SQL query: {}", &count_query);
@@ -618,12 +618,12 @@ impl RewardFlightRepository for RewardFlightLatestRepository {
         // Get paginated results
         let query = format!(
             "SELECT 
-                rflh.id, 
-                rflh.origin, 
-                rflh.destination, 
-                rflh.departure, 
-                rflh.carrier_code, 
-                rflh.scraped_at,
+                rfh.id, 
+                rfh.origin, 
+                rfh.destination, 
+                rfh.departure, 
+                rfh.carrier_code, 
+                rfh.scraped_at,
                 ae.id as ae_id,
                 ae.cabin_points_value as ae_cabin_points_value,
                 ae.is_saver_award as ae_is_saver_award,
@@ -644,16 +644,16 @@ impl RewardFlightRepository for RewardFlightLatestRepository {
                 af.is_saver_award as af_is_saver_award,
                 af.cabin_class_seat_count as af_cabin_class_seat_count,
                 af.cabin_class_seat_count_string as af_cabin_class_seat_count_string
-            FROM reward_flights_latest_historic rflh
-            LEFT JOIN award_economy_historic ae ON ae.flight_id = rflh.id
-            LEFT JOIN award_business_historic ab ON ab.flight_id = rflh.id
-            LEFT JOIN award_premium_economy_historic ape ON ape.flight_id = rflh.id
-            LEFT JOIN award_first_historic af ON af.flight_id = rflh.id
-            WHERE rflh.origin = $1 
-            AND rflh.destination = $2 
-            AND rflh.carrier_code = $3 
-            AND rflh.departure::date = $4
-            ORDER BY rflh.scraped_at ASC
+            FROM reward_flights_history rfh
+            LEFT JOIN award_economy_history ae ON ae.flight_id = rfh.id
+            LEFT JOIN award_business_history ab ON ab.flight_id = rfh.id
+            LEFT JOIN award_premium_economy_history ape ON ape.flight_id = rfh.id
+            LEFT JOIN award_first_history af ON af.flight_id = rfh.id
+            WHERE rfh.origin = $1 
+            AND rfh.destination = $2 
+            AND rfh.carrier_code = $3 
+            AND rfh.departure::date = $4
+            ORDER BY rfh.scraped_at DESC
             LIMIT $5 OFFSET $6"
         );
         
